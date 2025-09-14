@@ -110,38 +110,68 @@ class IKEAEventsMonitorCloud:
         soup = BeautifulSoup(html_content, 'html.parser')
         events = []
         try:
-            if location_key == 'etobicoke':
-                # Target the <ul> with aria-label="All events at IKEA Etobicoke"
-                ul = soup.find('ul', attrs={'aria-label': 'All events at IKEA Etobicoke'})
-                if ul:
-                    for li in ul.find_all('li', recursive=False):
-                        # Get event link
-                        a = li.find('a', href=True)
-                        event_url = a['href'] if a else ''
-                        # Get event title
-                        h3 = li.find('h3')
-                        title = h3.get_text(strip=True) if h3 else ''
-                        # Get event date/time
-                        p = li.find('p')
-                        date = p.get_text(strip=True) if p else ''
-                        # Compose event dict
-                        if title:
-                            events.append({
-                                'title': title,
-                                'date': date,
-                                'description': '',
-                                'url': event_url,
-                                'location': location_key,
-                                'location_name': self.locations[location_key]['name'],
-                                'extracted_at': datetime.now().isoformat()
-                            })
-                else:
-                    logger.warning('Could not find events <ul> for Etobicoke!')
-            else:
-                # Fallback to previous logic for other locations
-                return self.parse_events_fallback(html_content, location_key)
+            # Look for event containers - try multiple selectors
+            event_containers = []
+            
+            # Method 1: Look for <li> elements containing event links
+            li_elements = soup.find_all('li')
+            for li in li_elements:
+                # Check if this li contains an event link
+                event_link = li.find('a', href=True)
+                if event_link and '/events/' in event_link.get('href', ''):
+                    event_containers.append(li)
+            
+            # Method 2: Look for sections with event structure
+            if not event_containers:
+                sections = soup.find_all('section', class_=re.compile(r'sc-'))
+                for section in sections:
+                    # Check if this section contains event elements
+                    h3 = section.find('h3')
+                    p = section.find('p')
+                    if h3 and p and h3.get_text(strip=True):
+                        # Find the parent container
+                        parent = section.find_parent('li') or section.find_parent('div')
+                        if parent:
+                            event_containers.append(parent)
+            
+            # Parse each event container
+            for container in event_containers:
+                try:
+                    # Get event link
+                    event_link = container.find('a', href=True)
+                    event_url = event_link.get('href', '') if event_link else ''
+                    
+                    # Get event title from h3
+                    h3 = container.find('h3')
+                    title = h3.get_text(strip=True) if h3 else ''
+                    
+                    # Get event date from p tag
+                    p = container.find('p')
+                    date = p.get_text(strip=True) if p else ''
+                    
+                    # Only add if we have a title and it looks like a real event
+                    if title and self.is_valid_event_title(title):
+                        # Make URL absolute if it's relative
+                        if event_url and event_url.startswith('/'):
+                            event_url = 'https://www.ikea.com' + event_url
+                        
+                        events.append({
+                            'title': title,
+                            'date': date,
+                            'description': '',
+                            'url': event_url,
+                            'location': location_key,
+                            'location_name': self.locations[location_key]['name'],
+                            'extracted_at': datetime.now().isoformat()
+                        })
+                        
+                except Exception as e:
+                    logger.debug(f"Error parsing individual event: {e}")
+                    continue
+            
             logger.info(f"Found {len(events)} events at {self.locations[location_key]['name']}")
             return events
+            
         except Exception as e:
             logger.error(f"Error parsing events for {self.locations[location_key]['name']}: {e}")
             import traceback
@@ -259,14 +289,21 @@ class IKEAEventsMonitorCloud:
         if len(event_data.get('title', '')) < 3:
             return False
         
-        # Only filter out the most obvious promotional content
+        # Filter out promotional and marketing content
         invalid_keywords = [
             'sign up for', 'log in to', 'create account',
             'newsletter signup', 'follow us on', 'social media',
             'customer service', 'contact us', 'store hours',
             'directions to store', 'parking information',
             'return policy', 'privacy policy', 'terms and conditions',
-            'shop online', 'add to cart', 'add to wishlist'
+            'shop online', 'add to cart', 'add to wishlist',
+            'ikea family', 'rewards and instant benefits',
+            'business owner', 'meet ikea for business',
+            'enjoy rewards', 'instant benefits',
+            'family membership', 'loyalty program',
+            'credit card', 'ikea card', 'financing',
+            'delivery', 'assembly', 'installation',
+            'catalog', 'brochure', 'flyer'
         ]
         
         # Check if title or description contains invalid keywords
@@ -275,14 +312,63 @@ class IKEAEventsMonitorCloud:
         
         # Check for very generic/repetitive titles
         generic_titles = [
-            'click here', 'read more', 'view all details'
+            'click here', 'read more', 'view all details',
+            'learn more', 'find out more', 'discover more'
         ]
         
         if any(generic in title for generic in generic_titles):
             return False
         
-        # Be very permissive - if it has a title and isn't obviously promotional, accept it
-        return True
+        # Look for actual event indicators
+        event_indicators = [
+            'workshop', 'class', 'session', 'seminar', 'training',
+            'demonstration', 'tour', 'presentation', 'meeting',
+            'event', 'activity', 'program', 'course', 'lesson',
+            'cooking', 'crafting', 'design', 'decorating',
+            'sustainability', 'organization', 'storage',
+            'kids', 'children', 'family fun', 'story time'
+        ]
+        
+        # Must contain at least one event indicator to be considered valid
+        has_event_indicator = any(indicator in title or indicator in description for indicator in event_indicators)
+        
+        return has_event_indicator
+
+    def is_valid_event_title(self, title: str) -> bool:
+        """Check if the title represents a real event, not promotional content."""
+        title_lower = title.lower()
+        
+        # Filter out promotional content
+        invalid_keywords = [
+            'ikea family', 'rewards and instant benefits', 'enjoy rewards',
+            'business owner', 'meet ikea for business', 'family membership',
+            'loyalty program', 'credit card', 'ikea card', 'financing',
+            'delivery', 'assembly', 'installation', 'catalog', 'brochure',
+            'flyer', 'newsletter', 'sign up', 'log in', 'create account',
+            'customer service', 'contact us', 'store hours', 'directions',
+            'parking', 'return policy', 'privacy policy', 'terms and conditions',
+            'shop online', 'add to cart', 'add to wishlist', 'click here',
+            'read more', 'view all details', 'learn more', 'find out more'
+        ]
+        
+        # Check if title contains invalid keywords
+        if any(keyword in title_lower for keyword in invalid_keywords):
+            return False
+        
+        # Look for actual event indicators
+        event_indicators = [
+            'workshop', 'class', 'session', 'seminar', 'training',
+            'demonstration', 'tour', 'presentation', 'meeting',
+            'event', 'activity', 'program', 'course', 'lesson',
+            'cooking', 'crafting', 'design', 'decorating',
+            'sustainability', 'organization', 'storage',
+            'kids', 'children', 'family fun', 'story time',
+            'sale', 'warehouse sale', 'clearance', 'special offer',
+            'launch', 'opening', 'celebration', 'festival'
+        ]
+        
+        # Must contain at least one event indicator
+        return any(indicator in title_lower for indicator in event_indicators)
 
     def load_previous_events(self) -> Dict[str, List[Dict]]:
         """Load previously stored events organized by location."""
