@@ -2,8 +2,8 @@ name: IKEA Events Monitor
 
 on:
   schedule:
-    # Run at 12 PM and 6 PM EST (5 PM and 11 PM UTC)
-    - cron: "0 17,23 * * *"
+    # Run at 10 AM and 6 PM EST (3 PM and 11 PM UTC)
+    - cron: "0 15,23 * * *"
   workflow_dispatch: # Allow manual runs
 
 jobs:
@@ -36,4 +36,5 @@ jobs:
           SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
           SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
           RECIPIENT_EMAILS: ${{ secrets.RECIPIENT_EMAILS }}
-        run: python ikea_selenium_simple.py
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+        run: python ikea_selenium_db.py
