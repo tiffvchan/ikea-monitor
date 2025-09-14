@@ -304,7 +304,7 @@ def send_email(events):
             body += f"Date: {event['date']}\n"
             body += f"Location: {event['location']}\n"
             body += f"URL: {event['url']}\n"
-            body += "-" * 50 + "\n\n"
+            body += "-" * 45 + "\n\n"
         
         msg.attach(email.mime.text.MIMEText(body, 'plain'))
         
