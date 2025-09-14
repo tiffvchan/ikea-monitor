@@ -5,12 +5,14 @@ Monitors IKEA Etobicoke and North York events pages and sends email notification
 ## 🚀 Quick Setup
 
 ### Local Development
+
 1. Copy the template config: `cp config.json.template config.json`
 2. Edit `config.json` with your email settings
 3. Install dependencies: `pip install -r requirements.txt`
 4. Run: `python ikea_events_monitor.py --once`
 
 ### Cloud Deployment
+
 See [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) for detailed instructions on deploying to Railway, Render, or other platforms.
 
 ## 📁 Files
@@ -36,6 +38,7 @@ See [DEPLOYMENT_GUIDE.md](DEPLOYMENT_GUIDE.md) for detailed instructions on depl
 ## 🕐 Scheduling
 
 The script can run:
+
 - **Locally**: Using cron jobs or the built-in scheduler
 - **Cloud**: Using Railway, Render, or external cron services
 

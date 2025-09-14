@@ -28,7 +28,7 @@ In Railway dashboard, go to your project → Variables tab and add:
 ```
 SENDER_EMAIL=tiffanyvchan@gmail.com
 SENDER_PASSWORD=efhv hwcr tnfs sgaw
-RECIPIENT_EMAIL=tiffanyvchan@gmail.com
+RECIPIENT_EMAILS=tiffanyvchan@gmail.com,friend@gmail.com,family@gmail.com
 SMTP_SERVER=smtp.gmail.com
 SMTP_PORT=587
 CHECK_INTERVAL_HOURS=24
@@ -120,7 +120,8 @@ if __name__ == "__main__":
 
 - `SENDER_EMAIL`: Your Gmail address
 - `SENDER_PASSWORD`: Gmail app password (not your regular password)
-- `RECIPIENT_EMAIL`: Where to send notifications
+- `RECIPIENT_EMAILS`: Comma-separated list of email addresses (e.g., `email1@gmail.com,email2@gmail.com`)
+- `RECIPIENT_EMAIL`: Single email address (legacy support)
 - `SMTP_SERVER`: Usually `smtp.gmail.com`
 - `SMTP_PORT`: Usually `587`
 - `WEBHOOK_URL`: Slack webhook URL (optional)

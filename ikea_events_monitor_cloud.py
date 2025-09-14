@@ -60,15 +60,19 @@ class IKEAEventsMonitorCloud:
 
     def load_config_from_env(self) -> Dict:
         """Load configuration from environment variables."""
+        # Parse recipient emails (support both single email and comma-separated list)
+        recipient_emails_str = os.getenv('RECIPIENT_EMAILS', '') or os.getenv('RECIPIENT_EMAIL', '')
+        recipient_emails = [email.strip() for email in recipient_emails_str.split(',') if email.strip()]
+        
         config = {
             "notifications": {
                 "email": {
-                    "enabled": bool(os.getenv('SENDER_EMAIL') and os.getenv('SENDER_PASSWORD')),
+                    "enabled": bool(os.getenv('SENDER_EMAIL') and os.getenv('SENDER_PASSWORD') and recipient_emails),
                     "smtp_server": os.getenv('SMTP_SERVER', 'smtp.gmail.com'),
                     "smtp_port": int(os.getenv('SMTP_PORT', '587')),
                     "sender_email": os.getenv('SENDER_EMAIL', ''),
                     "sender_password": os.getenv('SENDER_PASSWORD', ''),
-                    "recipient_email": os.getenv('RECIPIENT_EMAIL', '')
+                    "recipient_emails": recipient_emails
                 },
                 "webhook": {
                     "enabled": bool(os.getenv('WEBHOOK_URL')),
@@ -80,6 +84,8 @@ class IKEAEventsMonitorCloud:
         }
         
         logger.info(f"Email notifications: {'enabled' if config['notifications']['email']['enabled'] else 'disabled'}")
+        if config['notifications']['email']['enabled']:
+            logger.info(f"Recipients: {', '.join(recipient_emails)}")
         logger.info(f"Webhook notifications: {'enabled' if config['notifications']['webhook']['enabled'] else 'disabled'}")
         
         return config
@@ -327,10 +333,15 @@ class IKEAEventsMonitorCloud:
             
         try:
             email_config = self.config['notifications']['email']
+            recipient_emails = email_config['recipient_emails']
+            
+            if not recipient_emails:
+                logger.warning("No recipient emails configured")
+                return
             
             msg = email.mime.multipart.MIMEMultipart()
             msg['From'] = email_config['sender_email']
-            msg['To'] = email_config['recipient_email']
+            msg['To'] = ', '.join(recipient_emails)  # Support multiple recipients
             msg['Subject'] = f"IKEA Events Update - {total_new_events} New Events"
             
             body = f"Found {total_new_events} new events at IKEA locations:\n\n"
@@ -359,10 +370,10 @@ class IKEAEventsMonitorCloud:
             server = smtplib.SMTP(email_config['smtp_server'], email_config['smtp_port'])
             server.starttls()
             server.login(email_config['sender_email'], email_config['sender_password'])
-            server.send_message(msg)
+            server.send_message(msg, to_addrs=recipient_emails)  # Send to all recipients
             server.quit()
             
-            logger.info("Email notification sent successfully")
+            logger.info(f"Email notification sent successfully to {len(recipient_emails)} recipient(s): {', '.join(recipient_emails)}")
             
         except Exception as e:
             logger.error(f"Error sending email notification: {e}")
