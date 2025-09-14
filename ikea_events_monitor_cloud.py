@@ -110,43 +110,34 @@ class IKEAEventsMonitorCloud:
         soup = BeautifulSoup(html_content, 'html.parser')
         events = []
         try:
-            # Look for event containers - try multiple selectors
-            event_containers = []
+            # Target the specific <ul> element with aria-label for each location
+            location_name = self.locations[location_key]['name']
+            ul_selector = f"ul[aria-label='All events at {location_name}']"
+            ul = soup.select_one(ul_selector)
             
-            # Method 1: Look for <li> elements containing event links
-            li_elements = soup.find_all('li')
+            if not ul:
+                logger.warning(f"Could not find <ul> with aria-label='All events at {location_name}'")
+                return []
+            
+            logger.info(f"Found events <ul> for {location_name}")
+            
+            # Find all <li> elements within this <ul>
+            li_elements = ul.find_all('li', recursive=False)
+            logger.info(f"Found {len(li_elements)} <li> elements in events list")
+            
+            # Parse each <li> element
             for li in li_elements:
-                # Check if this li contains an event link
-                event_link = li.find('a', href=True)
-                if event_link and '/events/' in event_link.get('href', ''):
-                    event_containers.append(li)
-            
-            # Method 2: Look for sections with event structure
-            if not event_containers:
-                sections = soup.find_all('section', class_=re.compile(r'sc-'))
-                for section in sections:
-                    # Check if this section contains event elements
-                    h3 = section.find('h3')
-                    p = section.find('p')
-                    if h3 and p and h3.get_text(strip=True):
-                        # Find the parent container
-                        parent = section.find_parent('li') or section.find_parent('div')
-                        if parent:
-                            event_containers.append(parent)
-            
-            # Parse each event container
-            for container in event_containers:
                 try:
                     # Get event link
-                    event_link = container.find('a', href=True)
+                    event_link = li.find('a', href=True)
                     event_url = event_link.get('href', '') if event_link else ''
                     
                     # Get event title from h3
-                    h3 = container.find('h3')
+                    h3 = li.find('h3')
                     title = h3.get_text(strip=True) if h3 else ''
                     
                     # Get event date from p tag
-                    p = container.find('p')
+                    p = li.find('p')
                     date = p.get_text(strip=True) if p else ''
                     
                     # Only add if we have a title and it looks like a real event
@@ -164,6 +155,8 @@ class IKEAEventsMonitorCloud:
                             'location_name': self.locations[location_key]['name'],
                             'extracted_at': datetime.now().isoformat()
                         })
+                        
+                        logger.info(f"Found event: {title}")
                         
                 except Exception as e:
                     logger.debug(f"Error parsing individual event: {e}")
