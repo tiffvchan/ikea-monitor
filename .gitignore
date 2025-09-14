@@ -53,6 +53,12 @@ ikea_cron.log
 previous_events.json
 config.json
 
+# Sensitive files (NEVER commit these!)
+*.env
+.env.*
+secrets.json
+credentials.json
+
 # Cron files
 current_crontab.txt
 ikea_crontab.txt
