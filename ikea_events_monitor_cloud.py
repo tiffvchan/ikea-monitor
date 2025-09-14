@@ -110,34 +110,55 @@ class IKEAEventsMonitorCloud:
         soup = BeautifulSoup(html_content, 'html.parser')
         events = []
         try:
-            # Target the specific <ul> element with aria-label for each location
-            location_name = self.locations[location_key]['name']
-            ul_selector = f"ul[aria-label='All events at {location_name}']"
-            ul = soup.select_one(ul_selector)
+            # Find any <ul> element that contains event links
+            logger.info(f"Looking for <ul> elements with event links for {self.locations[location_key]['name']}")
             
-            if not ul:
-                logger.warning(f"Could not find <ul> with aria-label='All events at {location_name}'")
+            # Look for <ul> elements that contain links to /events/
+            all_uls = soup.find_all('ul')
+            target_ul = None
+            
+            for ul in all_uls:
+                # Check if this ul contains event links
+                event_links = ul.find_all('a', href=re.compile(r'/events/'))
+                if event_links:
+                    target_ul = ul
+                    logger.info(f"Found <ul> with {len(event_links)} event links")
+                    break
+            
+            if not target_ul:
+                logger.warning(f"Could not find <ul> with event links for {self.locations[location_key]['name']}")
                 return []
             
-            logger.info(f"Found events <ul> for {location_name}")
-            
             # Find all <li> elements within this <ul>
-            li_elements = ul.find_all('li', recursive=False)
+            li_elements = target_ul.find_all('li', recursive=False)
             logger.info(f"Found {len(li_elements)} <li> elements in events list")
             
-            # Parse each <li> element
+            # Parse each <li> element using the structure: li > a > section > div > h3 + p
             for li in li_elements:
                 try:
-                    # Get event link
+                    # Get the <a> tag with the event link
                     event_link = li.find('a', href=True)
-                    event_url = event_link.get('href', '') if event_link else ''
+                    if not event_link:
+                        continue
+                        
+                    event_url = event_link.get('href', '')
+                    
+                    # Navigate the structure: a > section > div > h3 (title) + p (date)
+                    section = event_link.find('section')
+                    if not section:
+                        continue
+                    
+                    # Find the div containing h3 and p
+                    content_div = section.find('div')
+                    if not content_div:
+                        continue
                     
                     # Get event title from h3
-                    h3 = li.find('h3')
+                    h3 = content_div.find('h3')
                     title = h3.get_text(strip=True) if h3 else ''
                     
                     # Get event date from p tag
-                    p = li.find('p')
+                    p = content_div.find('p')
                     date = p.get_text(strip=True) if p else ''
                     
                     # Only add if we have a title and it looks like a real event
@@ -156,7 +177,7 @@ class IKEAEventsMonitorCloud:
                             'extracted_at': datetime.now().isoformat()
                         })
                         
-                        logger.info(f"Found event: {title}")
+                        logger.info(f"Found event: {title} - {date}")
                         
                 except Exception as e:
                     logger.debug(f"Error parsing individual event: {e}")
