@@ -112,6 +112,35 @@ def save_previous_events(events):
     finally:
         conn.close()
 
+def cleanup_old_events(days_to_keep=30):
+    """Delete events older than specified days."""
+    conn = get_database_connection()
+    if not conn:
+        return False
+    
+    try:
+        with conn.cursor() as cur:
+            # Delete events older than specified days
+            cur.execute("""
+                DELETE FROM previous_events 
+                WHERE created_at < NOW() - INTERVAL '%s days'
+            """, (days_to_keep,))
+            
+            deleted_count = cur.rowcount
+            conn.commit()
+            
+            if deleted_count > 0:
+                logger.info(f"Cleaned up {deleted_count} old events (older than {days_to_keep} days)")
+            else:
+                logger.info("No old events to clean up")
+            
+            return True
+    except Exception as e:
+        logger.error(f"Error cleaning up old events: {e}")
+        return False
+    finally:
+        conn.close()
+
 def get_driver():
     """Get a Chrome WebDriver instance."""
     chrome_options = Options()
@@ -295,6 +324,9 @@ def main():
     # Initialize database
     if not init_database():
         logger.warning("Database initialization failed, continuing without duplicate prevention")
+    
+    # Clean up old events (keep last 30 days)
+    cleanup_old_events(days_to_keep=30)
     
     locations = [
         {
