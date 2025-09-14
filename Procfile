@@ -1,1 +1,1 @@
-web: python ikea_events_monitor.py
+web: python ikea_selenium_simple.py
