@@ -31,10 +31,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-       - name: Run IKEA monitor
-         env:
-           SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
-           SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
-           RECIPIENT_EMAILS: ${{ secrets.RECIPIENT_EMAILS }}
-           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-         run: python ikea_selenium_db.py
+      - name: Run IKEA monitor
+        env:
+          SENDER_EMAIL: ${{ secrets.SENDER_EMAIL }}
+          SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
+          RECIPIENT_EMAILS: ${{ secrets.RECIPIENT_EMAILS }}
+        run: python ikea_selenium_simple.py
