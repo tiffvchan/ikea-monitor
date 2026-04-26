@@ -11,6 +11,8 @@ from datetime import datetime
 import logging
 import json
 import hashlib
+import re
+from urllib.parse import urlparse
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
@@ -27,6 +29,90 @@ from webdriver_manager.chrome import ChromeDriverManager
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+NOISE_TITLE_PATTERNS = [
+    "all events",
+    "ikea etobicoke",
+    "ikea north york",
+    "logged in",
+    "create an account",
+    "join our events",
+]
+
+NOISE_DATE_PATTERNS = [
+    "you need to be logged in",
+    "create an account",
+    "no registration required",
+]
+
+MONTH_PATTERN = re.compile(
+    r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec|monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b",
+    re.IGNORECASE,
+)
+
+
+def normalize_whitespace(value):
+    return " ".join((value or "").split())
+
+
+def split_nonempty_lines(value):
+    return [line.strip() for line in (value or "").splitlines() if line.strip()]
+
+
+def is_noise_title(value):
+    normalized = normalize_whitespace(value).lower()
+    if not normalized:
+        return True
+    return any(pattern in normalized for pattern in NOISE_TITLE_PATTERNS)
+
+
+def is_noise_date(value):
+    normalized = normalize_whitespace(value).lower()
+    if not normalized:
+        return True
+    return any(pattern in normalized for pattern in NOISE_DATE_PATTERNS)
+
+
+def is_event_detail_url(event_url, location_name):
+    """Keep only real store event detail pages."""
+    try:
+        parsed = urlparse(event_url)
+        path = (parsed.path or "").lower().rstrip("/")
+        if not path.startswith("/ca/en/stores/events/"):
+            return False
+        # Exclude generic listing root pages.
+        if path in {"/ca/en/stores/events", "/ca/en/stores/events/ikea-etobicoke", "/ca/en/stores/events/ikea-north-york"}:
+            return False
+        store_slug = location_name.lower().replace(" ", "-")
+        return f"/stores/events/{store_slug}/" in path
+    except Exception:
+        return False
+
+
+def extract_title_and_date_from_text(raw_text):
+    lines = split_nonempty_lines(raw_text)
+    if not lines:
+        return "", ""
+
+    title = ""
+    date = ""
+
+    for line in lines:
+        if len(line) > 5 and not is_noise_title(line):
+            title = line
+            break
+
+    for line in lines:
+        candidate = normalize_whitespace(line)
+        if candidate == title:
+            continue
+        if is_noise_date(candidate):
+            continue
+        if MONTH_PATTERN.search(candidate) or " a.m." in candidate.lower() or " p.m." in candidate.lower() or " et" in candidate.lower():
+            date = candidate
+            break
+
+    return title, date
 
 def get_database_connection():
     """Get database connection."""
@@ -230,17 +316,19 @@ def scrape_ikea_events(url, location_name):
                 for link in event_links:
                     try:
                         event_url = link.get_attribute('href')
-                        if not event_url:
+                        if not event_url or not is_event_detail_url(event_url, location_name):
                             continue
 
-                        title = (link.text or "").strip()
+                        title, date = extract_title_and_date_from_text(link.text or "")
                         if not title:
                             # Support newer IKEA markup where title is nested under different heading tags.
                             title_candidates = link.find_elements(By.XPATH, ".//*[self::h1 or self::h2 or self::h3 or self::h4 or self::span]")
                             for candidate in title_candidates:
-                                candidate_text = candidate.text.strip()
-                                if len(candidate_text) > 5:
-                                    title = candidate_text
+                                candidate_title, candidate_date = extract_title_and_date_from_text(candidate.text or "")
+                                if candidate_title:
+                                    title = candidate_title
+                                    if not date and candidate_date:
+                                        date = candidate_date
                                     break
 
                         if not title:
@@ -248,24 +336,27 @@ def scrape_ikea_events(url, location_name):
                             container = link.find_element(By.XPATH, "./ancestor::*[self::article or self::section or self::div][1]")
                             title_candidates = container.find_elements(By.XPATH, ".//*[self::h1 or self::h2 or self::h3 or self::h4]")
                             for candidate in title_candidates:
-                                candidate_text = candidate.text.strip()
-                                if len(candidate_text) > 5:
-                                    title = candidate_text
+                                candidate_title, _ = extract_title_and_date_from_text(candidate.text or "")
+                                if candidate_title:
+                                    title = candidate_title
                                     break
 
-                        if not title or len(title) <= 5:
+                        if not title or len(title) <= 5 or is_noise_title(title):
                             continue
 
-                        date = ""
-                        try:
-                            date_candidates = link.find_elements(By.XPATH, "./ancestor::*[self::article or self::section or self::div][1]//*[self::time or self::p]")
-                            for candidate in date_candidates:
-                                candidate_text = candidate.text.strip()
-                                if candidate_text:
-                                    date = candidate_text
-                                    break
-                        except Exception:
-                            pass
+                        if not date:
+                            try:
+                                container = link.find_element(By.XPATH, "./ancestor::*[self::article or self::section or self::div][1]")
+                                container_text = container.text or ""
+                                _, container_date = extract_title_and_date_from_text(container_text)
+                                if container_date:
+                                    date = container_date
+                            except Exception:
+                                pass
+
+                        date = normalize_whitespace(date)
+                        if is_noise_date(date):
+                            date = ""
 
                         event_key = f"{title}|{date}|{event_url}"
                         if event_key not in seen_events:
