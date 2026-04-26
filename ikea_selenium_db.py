@@ -179,7 +179,14 @@ def scrape_ikea_events(url, location_name):
         )
         
         import time
-        time.sleep(5)
+        time.sleep(6)
+
+        # IKEA event cards are often rendered after initial load; scroll to trigger lazy loading.
+        for _ in range(3):
+            driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+            time.sleep(1.5)
+        driver.execute_script("window.scrollTo(0, 0);")
+        time.sleep(1)
         
         try:
             event_elements = driver.find_elements(By.XPATH, "//*[contains(text(), 'BINGO') or contains(text(), 'Warehouse') or contains(text(), 'workshop') or contains(text(), 'class')]")
@@ -222,33 +229,73 @@ def scrape_ikea_events(url, location_name):
                 
                 for link in event_links:
                     try:
-                        parent = link.find_element(By.XPATH, "./ancestor::li[1]")
-                        
-                        title_elem = parent.find_elements(By.TAG_NAME, "h3")
-                        date_elem = parent.find_elements(By.TAG_NAME, "p")
-                        
-                        if title_elem:
-                            title = title_elem[0].text.strip()
-                            date = date_elem[0].text.strip() if date_elem else ""
-                            url = link.get_attribute('href')
-                            
-                            if title and len(title) > 5:
-                                event_key = f"{title}|{date}|{url}"
-                                if event_key not in seen_events:
-                                    seen_events.add(event_key)
-                                    events.append({
-                                        'title': title,
-                                        'date': date,
-                                        'url': url,
-                                        'location': location_name
-                                    })
-                                    logger.info(f"Found event: {title}")
+                        event_url = link.get_attribute('href')
+                        if not event_url:
+                            continue
+
+                        title = (link.text or "").strip()
+                        if not title:
+                            # Support newer IKEA markup where title is nested under different heading tags.
+                            title_candidates = link.find_elements(By.XPATH, ".//*[self::h1 or self::h2 or self::h3 or self::h4 or self::span]")
+                            for candidate in title_candidates:
+                                candidate_text = candidate.text.strip()
+                                if len(candidate_text) > 5:
+                                    title = candidate_text
+                                    break
+
+                        if not title:
+                            # Try nearby container text when link text is empty.
+                            container = link.find_element(By.XPATH, "./ancestor::*[self::article or self::section or self::div][1]")
+                            title_candidates = container.find_elements(By.XPATH, ".//*[self::h1 or self::h2 or self::h3 or self::h4]")
+                            for candidate in title_candidates:
+                                candidate_text = candidate.text.strip()
+                                if len(candidate_text) > 5:
+                                    title = candidate_text
+                                    break
+
+                        if not title or len(title) <= 5:
+                            continue
+
+                        date = ""
+                        try:
+                            date_candidates = link.find_elements(By.XPATH, "./ancestor::*[self::article or self::section or self::div][1]//*[self::time or self::p]")
+                            for candidate in date_candidates:
+                                candidate_text = candidate.text.strip()
+                                if candidate_text:
+                                    date = candidate_text
+                                    break
+                        except Exception:
+                            pass
+
+                        event_key = f"{title}|{date}|{event_url}"
+                        if event_key not in seen_events:
+                            seen_events.add(event_key)
+                            events.append({
+                                'title': title,
+                                'date': date,
+                                'url': event_url,
+                                'location': location_name
+                            })
+                            logger.info(f"Found event: {title}")
                                 
                     except Exception as e:
                         continue
                         
             except Exception as e:
                 logger.debug(f"Strategy 2 failed: {e}")
+
+        if not events:
+            # Extra diagnostics to explain "0 events" cases in CI logs.
+            all_links = driver.find_elements(By.TAG_NAME, "a")
+            event_like_links = [a for a in all_links if "/events/" in (a.get_attribute("href") or "")]
+            logger.warning(
+                "No events extracted for %s. total_links=%d event_like_links=%d page_title=%s current_url=%s",
+                location_name,
+                len(all_links),
+                len(event_like_links),
+                driver.title,
+                driver.current_url,
+            )
         
         logger.info(f"Found {len(events)} unique events for {location_name}")
         return events
@@ -280,15 +327,21 @@ def find_new_events(current_events, previous_events):
 def send_email(events):
     """Send email notification about events."""
     if not events:
+        logger.info("send_email called with no events")
         return
         
     try:
         sender_email = os.getenv('SENDER_EMAIL')
         sender_password = os.getenv('SENDER_PASSWORD')
-        recipient_emails = os.getenv('RECIPIENT_EMAILS', '').split(',')
+        recipient_emails = [email.strip() for email in os.getenv('RECIPIENT_EMAILS', '').split(',') if email.strip()]
         
         if not sender_email or not sender_password or not recipient_emails:
-            logger.warning("Email credentials not configured")
+            logger.warning(
+                "Email not configured: sender_email=%s sender_password_set=%s recipients=%d",
+                bool(sender_email),
+                bool(sender_password),
+                len(recipient_emails),
+            )
             return
         
         msg = email.mime.multipart.MIMEMultipart()
@@ -321,6 +374,8 @@ def send_email(events):
 
 def main():
     """Main function."""
+    force_email = os.getenv("FORCE_EMAIL", "false").lower() in {"1", "true", "yes", "y"}
+
     # Initialize database
     if not init_database():
         logger.warning("Database initialization failed, continuing without duplicate prevention")
@@ -351,6 +406,12 @@ def main():
     
     if all_events:
         logger.info(f"Found {len(all_events)} total events")
+
+        if force_email:
+            logger.info("FORCE_EMAIL enabled - sending all current events")
+            send_email(all_events)
+            save_previous_events(all_events)
+            return
         
         # Find new events
         new_events = find_new_events(all_events, previous_events)
