@@ -73,6 +73,22 @@ def is_noise_date(value):
     return any(pattern in normalized for pattern in NOISE_DATE_PATTERNS)
 
 
+def looks_like_date_line(value):
+    normalized = normalize_whitespace(value)
+    lowered = normalized.lower()
+    return bool(
+        normalized
+        and (
+            MONTH_PATTERN.search(normalized)
+            or " a.m." in lowered
+            or " p.m." in lowered
+            or " et" in lowered
+            or " am " in lowered
+            or " pm " in lowered
+        )
+    )
+
+
 def is_event_detail_url(event_url, location_name):
     """Keep only real store event detail pages."""
     try:
@@ -98,9 +114,16 @@ def extract_title_and_date_from_text(raw_text):
     date = ""
 
     for line in lines:
-        if len(line) > 5 and not is_noise_title(line):
+        if len(line) > 5 and not is_noise_title(line) and not looks_like_date_line(line):
             title = line
             break
+
+    # Fallback when event card text is sparse and title line is missing.
+    if not title:
+        for line in lines:
+            if len(line) > 5 and not is_noise_title(line):
+                title = line
+                break
 
     for line in lines:
         candidate = normalize_whitespace(line)
@@ -108,7 +131,7 @@ def extract_title_and_date_from_text(raw_text):
             continue
         if is_noise_date(candidate):
             continue
-        if MONTH_PATTERN.search(candidate) or " a.m." in candidate.lower() or " p.m." in candidate.lower() or " et" in candidate.lower():
+        if looks_like_date_line(candidate):
             date = candidate
             break
 
