@@ -488,8 +488,6 @@ def send_email(events):
 
 def main():
     """Main function."""
-    force_email = os.getenv("FORCE_EMAIL", "false").lower() in {"1", "true", "yes", "y"}
-
     # Initialize database
     if not init_database():
         logger.warning("Database initialization failed, continuing without duplicate prevention")
@@ -520,12 +518,6 @@ def main():
     
     if all_events:
         logger.info(f"Found {len(all_events)} total events")
-
-        if force_email:
-            logger.info("FORCE_EMAIL enabled - sending all current events")
-            send_email(all_events)
-            save_previous_events(all_events)
-            return
         
         # Find new events
         new_events = find_new_events(all_events, previous_events)
