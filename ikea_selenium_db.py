@@ -105,6 +105,23 @@ def is_event_detail_url(event_url, location_name):
         return False
 
 
+def normalize_event_url(url):
+    """Stable key for deduplication across runs (query/fragment and casing ignored)."""
+    if not url or not isinstance(url, str):
+        return ""
+    try:
+        parsed = urlparse(url.strip())
+        if not parsed.netloc:
+            return ""
+        path = (parsed.path or "").rstrip("/").lower()
+        if "/stores/events/" not in path:
+            return ""
+        host = (parsed.netloc or "").lower()
+        return f"{host}{path}"
+    except Exception:
+        return ""
+
+
 def extract_title_and_date_from_text(raw_text):
     lines = split_nonempty_lines(raw_text)
     if not lines:
@@ -181,19 +198,26 @@ def init_database():
         conn.close()
 
 def get_previous_events():
-    """Get previous events from database."""
+    """Load prior event identity from DB (hashes + normalized URLs)."""
+    empty = {"hashes": set(), "urls": set()}
     conn = get_database_connection()
     if not conn:
-        return {}
-    
+        return empty
+
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute("SELECT event_hash FROM previous_events")
+            cur.execute("SELECT event_hash, url FROM previous_events")
             rows = cur.fetchall()
-            return {row['event_hash']: True for row in rows}
+        hashes = {row["event_hash"] for row in rows if row.get("event_hash")}
+        urls = set()
+        for row in rows:
+            nu = normalize_event_url(row.get("url") or "")
+            if nu:
+                urls.add(nu)
+        return {"hashes": hashes, "urls": urls}
     except Exception as e:
         logger.error(f"Error getting previous events: {e}")
-        return {}
+        return empty
     finally:
         conn.close()
 
@@ -421,21 +445,42 @@ def scrape_ikea_events(url, location_name):
         if driver:
             driver.quit()
 
-def get_event_hash(event):
-    """Create a unique hash for an event."""
+def legacy_event_hash(event):
+    """Old identity: title/date/location can drift between scrapes — kept for DB migration."""
     event_string = f"{event['title']}|{event['date']}|{event['location']}"
     return hashlib.md5(event_string.encode()).hexdigest()
+
+
+def get_event_hash(event):
+    """Primary identity: normalized event URL (stable). Falls back if URL missing."""
+    nu = normalize_event_url(event.get("url") or "")
+    if nu:
+        return hashlib.md5(nu.encode()).hexdigest()
+    return legacy_event_hash(event)
+
 
 def find_new_events(current_events, previous_events):
     """Find events that are new since last check."""
     new_events = []
-    
+    hashes = previous_events.get("hashes") or set()
+    urls = previous_events.get("urls") or set()
+    seen_urls_this_run = set()
+
     for event in current_events:
-        event_hash = get_event_hash(event)
-        if event_hash not in previous_events:
-            new_events.append(event)
-            logger.info(f"New event found: {event['title']}")
-    
+        nu = normalize_event_url(event.get("url") or "")
+        if nu:
+            if nu in urls or nu in seen_urls_this_run:
+                continue
+        h = get_event_hash(event)
+        if h in hashes:
+            continue
+        if legacy_event_hash(event) in hashes:
+            continue
+        if nu:
+            seen_urls_this_run.add(nu)
+        new_events.append(event)
+        logger.info(f"New event found: {event['title']}")
+
     return new_events
 
 def send_email(events):
@@ -508,7 +553,11 @@ def main():
     
     # Get previous events
     previous_events = get_previous_events()
-    logger.info(f"Loaded {len(previous_events)} previous events from database")
+    logger.info(
+        "Loaded %d previous hashes and %d known event URLs from database",
+        len(previous_events["hashes"]),
+        len(previous_events["urls"]),
+    )
     
     all_events = []
     
