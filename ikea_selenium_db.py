@@ -12,7 +12,8 @@ import logging
 import json
 import hashlib
 import re
-from urllib.parse import urlparse
+import socket
+from urllib.parse import urlparse, urlencode, parse_qsl, urlsplit, urlunsplit
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
@@ -154,19 +155,77 @@ def extract_title_and_date_from_text(raw_text):
 
     return title, date
 
+def _is_supabase_host(hostname):
+    if not hostname:
+        return False
+    h = hostname.lower()
+    return "supabase.co" in h or "supabase.com" in h
+
+
+def _ensure_supabase_sslmode(database_url):
+    """Supabase requires TLS; append sslmode=require if missing."""
+    parts = urlsplit(database_url.strip())
+    if not _is_supabase_host(parts.hostname):
+        return database_url.strip()
+    query = dict(parse_qsl(parts.query, keep_blank_values=True))
+    if "sslmode" not in query:
+        query["sslmode"] = "require"
+    new_query = urlencode(query)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, new_query, parts.fragment))
+
+
+def _prefer_ipv4_supabase(database_url):
+    """GitHub-hosted runners often have no IPv6 route; force IPv4 via libpq hostaddr."""
+    parts = urlsplit(database_url.strip())
+    host = parts.hostname
+    if not host or not _is_supabase_host(host):
+        return database_url.strip()
+    port = parts.port or 5432
+    try:
+        infos = socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM)
+        if not infos:
+            return database_url.strip()
+        ipv4 = infos[0][4][0]
+        query = dict(parse_qsl(parts.query, keep_blank_values=True))
+        query["hostaddr"] = ipv4
+        new_query = urlencode(query)
+        out = urlunsplit((parts.scheme, parts.netloc, parts.path, new_query, parts.fragment))
+        logger.info("Using IPv4 hostaddr for Supabase (%s -> %s)", host, ipv4)
+        return out
+    except Exception as e:
+        logger.warning("Could not resolve Supabase host to IPv4, using default DNS: %s", e)
+        return database_url.strip()
+
+
 def get_database_connection():
     """Get database connection."""
     try:
-        # Use Render's DATABASE_URL environment variable
-        database_url = os.getenv('DATABASE_URL')
+        database_url = os.getenv("DATABASE_URL")
         if not database_url:
             logger.warning("No DATABASE_URL found, using file-based storage")
             return None
-        
+
+        database_url = _ensure_supabase_sslmode(database_url)
+        database_url = _prefer_ipv4_supabase(database_url)
         conn = psycopg2.connect(database_url)
         return conn
     except Exception as e:
-        logger.error(f"Database connection failed: {e}")
+        err = str(e).lower()
+        logger.error("Database connection failed: %s", e)
+        if "network is unreachable" in err and "2600:" in str(e):
+            logger.error(
+                "IPv6 route failed (common on GitHub Actions). "
+                "Pull latest ikea_selenium_db.py (forces IPv4 hostaddr for Supabase), "
+                "or enable Supabase IPv4 add-on / use Session pooler hostname."
+            )
+        if "tenant or user not found" in err or "pooler.supabase.com" in err:
+            logger.error(
+                "Supabase pooler auth failed. Fix DATABASE_URL in GitHub secrets: "
+                "use Project Settings → Database → Connection string. "
+                "For Transaction pooler (port 6543), username must be postgres.<project-ref>, "
+                "not plain postgres. Or switch to the Direct connection URI (port 5432), "
+                "which often works better from CI."
+            )
         return None
 
 def init_database():
