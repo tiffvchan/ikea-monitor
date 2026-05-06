@@ -199,10 +199,9 @@ def init_database():
 
 def get_previous_events():
     """Load prior event identity from DB (hashes + normalized URLs)."""
-    empty = {"hashes": set(), "urls": set()}
     conn = get_database_connection()
     if not conn:
-        return empty
+        return None
 
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -217,7 +216,7 @@ def get_previous_events():
         return {"hashes": hashes, "urls": urls}
     except Exception as e:
         logger.error(f"Error getting previous events: {e}")
-        return empty
+        return None
     finally:
         conn.close()
 
@@ -553,6 +552,10 @@ def main():
     
     # Get previous events
     previous_events = get_previous_events()
+    if previous_events is None:
+        logger.error("Unable to load previous events state; skipping email to prevent duplicate notifications")
+        return
+
     logger.info(
         "Loaded %d previous hashes and %d known event URLs from database",
         len(previous_events["hashes"]),
